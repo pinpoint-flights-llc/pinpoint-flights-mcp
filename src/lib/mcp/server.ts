@@ -6,7 +6,7 @@ import { SERVER_INSTRUCTIONS, TOOL_DESCRIPTION, inputSchema, searchFlights, type
  * our own code rather than pull in the SDK. Spec: https://modelcontextprotocol.io/specification
  */
 /** Keep equal to "version" in server.json (the MCP Registry manifest): each publish there needs a new one. */
-export const VERSION = "1.1.0";
+export const VERSION = "1.1.1";
 const VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /** What a search says when the caller has no connector key yet. Written for the assistant to pass on. */

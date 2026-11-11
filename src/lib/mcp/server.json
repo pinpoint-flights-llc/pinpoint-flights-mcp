@@ -3,7 +3,7 @@
   "name": "flights.pinpoint/pinpoint-flights",
   "title": "Pinpoint Flights",
   "description": "Flight search with very deep filters, from your assistant. Fla. Seller of Travel Reg. No. ST150266",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "websiteUrl": "https://pinpoint.flights/connect",
   "repository": {
     "url": "https://github.com/pinpoint-flights-llc/pinpoint-flights-mcp",
@@ -25,8 +25,8 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Bearer <your connector key>. The key is free: get a personal link at https://pinpoint.flights/connect and use its last part. Connecting and listing the tool work without it; searching needs it.",
-          "isRequired": true,
+          "description": "Optional to connect, needed to search: Bearer <your connector key>. The key is free: get a personal link at https://pinpoint.flights/connect and use its last part. Without it the server connects and lists its tool, and a search answers with where to get a key.",
+          "isRequired": false,
           "isSecret": true
         }
       ]
