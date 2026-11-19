@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { verifyKey } from "@/lib/mcp/keys";
-import { postOnly, serve } from "@/lib/mcp/serve";
+import { guide, postOnly, serve } from "@/lib/mcp/serve";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -20,5 +20,7 @@ export async function POST(req: NextRequest) {
   return serve(req, keyId);
 }
 
-export const GET = postOnly;
+export function GET(req: NextRequest) {
+  return guide(req, false);
+}
 export const DELETE = postOnly;

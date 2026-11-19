@@ -88,7 +88,7 @@ describe("search_flights", () => {
       }, caller(id));
       notes.push(result.status === "results" ? result.tell_the_traveller ?? null : result.status);
       if (i === 0) {
-        expect(result.link).toMatch(/^https:\/\/pinpoint\.flights\/s\/[A-Za-z0-9_-]{12}$/);
+        expect(result.results_url).toMatch(/^https:\/\/pinpoint\.flights\/s\/[A-Za-z0-9_-]{12}$/);
         const sections = result.sections as Array<{ title: string; flights: Array<{ book_url?: string }> }>;
         const flights = [result.best_match as { book_url?: string }, ...sections.flatMap((g) => g.flights)];
         expect(flights.length).toBeGreaterThan(1);
@@ -124,5 +124,21 @@ describe("same-price swaps", () => {
     const e = withSwaps([trip("AA2668", "AA2509", 499), trip("AA2668", "AA1643", 499), trip("B62324", "B62423", 497), trip("AA2668", "AA2139", 591)]);
     expect(e.map((x) => [x.o.id, x.rank])).toEqual([["AA2668-AA2509", 1], ["B62324-B62423", 3], ["AA2668-AA2139", 4]]);
     expect(e[0].otherReturns.map((x) => x.id)).toEqual(["AA2668-AA1643"]);
+  });
+});
+
+describe("GET on the server's address", () => {
+  it("tells an agent that opened the link how to call it, and gives MCP stream requests the 405", async () => {
+    const { NextRequest } = await import("next/server");
+    const { guide } = await import("../src/lib/mcp/serve");
+    const opened = guide(new NextRequest("https://pinpoint.flights/mcp/abc123"), true);
+    expect(opened.status).toBe(200);
+    const text = await opened.text();
+    expect(text).toContain("curl -s https://pinpoint.flights/mcp/abc123");
+    expect(text).toContain('"method":"tools/list"');
+    expect(text).toContain("results_url");
+    expect(text).not.toContain("Authorization: Bearer <key>\" -d");
+    expect(await guide(new NextRequest("https://pinpoint.flights/mcp"), false).text()).toContain('-H "Authorization: Bearer <key>"');
+    expect(guide(new NextRequest("https://pinpoint.flights/mcp/abc123", { headers: { accept: "text/event-stream" } }), true).status).toBe(405);
   });
 });

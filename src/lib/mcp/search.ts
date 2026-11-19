@@ -12,6 +12,7 @@ import { validateSpec } from "@/lib/filterspec/validate";
 import { freshRunsLast24h, track, type Visit } from "@/lib/analytics";
 import { runPlan } from "@/lib/planner";
 import { compromises } from "@/lib/planner/compromise";
+import { priceParts } from "@/lib/planner/price";
 import type { PlanEvent, ScoredOffer } from "@/lib/planner/types";
 import { verdict } from "@/lib/planner/verdict";
 import { sellerHref } from "@/lib/clickout/links";
@@ -121,7 +122,7 @@ const ARG_NOTES: Record<string, string> = {
   returnTimes: "Clock-time limits for the return flight, as for outboundTimes",
   timesApplyToBothDirections: "yes when the traveller gave one set of times meant for both the depart and the return flight",
   travelers: "Who is flying: adults, each child's age, babies on a lap or in their own seat, and nationalities when given",
-  bags: "Bags to include in the price: carry-ons and checked bags (per person, or shared across the group when pooled)",
+  bags: "Bags the traveller brings: carry-ons and checked bags (per person, or shared across the group when pooled). Checked bag fees are listed beside each fare and counted in its all-in price",
   cabin: "Cabin class, whether mixing cabins between legs is fine, and any upgrade the traveller wants priced",
   route: "Stops and connections: nonstop as a requirement or a preference, layover lengths, overnight and self-transfer connections, airports or countries to avoid, total travel time",
   airlines: "Airlines and alliances to prefer, to rather not fly (soft), or never to fly (hard), with any exceptions",
@@ -146,12 +147,12 @@ export const inputSchema = withArgNotes(loosen(z.toJSONSchema(SearchInput)) as R
 const PARSER_ONLY = ["- \"Not stated\"", "- Form fields", "- Ask at most", "- Question field names", "- The readback", "- Writing style", "- Output only"];
 export const FILLING_RULES = SYSTEM_PROMPT.split("\n").filter((l) => l.startsWith("- ") && !PARSER_ONLY.some((p) => l.startsWith(p))).join("\n");
 
-export const TOOL_DESCRIPTION = `Search flights on Pinpoint Flights, a flight search with very deep filters: exact time windows, nonstop vs. price trade-offs, bags, fare rules, airlines to avoid, flexible dates and trip lengths, nearby airports, several destinations at once. Fill in only what the traveller said and leave everything else out (defaults apply). If something that changes the results is missing (dates, how long the stay is, an airport we can't place), no search runs: you get questions back to ask the traveller, then call again with the answers. Each traveller has ${env.mcpDailySearches} searches a day, so ask before searching when the request is vague, and don't run near-identical searches to compare: one search already prices many date combinations. Repeating a search from the last 24 hours is free. Results come with a link to the full results on pinpoint.flights, and each flight that can be booked has its own book_url: show the traveller the best match and every flight in each section (up to 10 in all), in rank order, each with its price, times, stops, airline and book_url, not just the top one or two; mention same-price swaps when a flight lists them; and give them the results link too, since booking happens there.
+export const TOOL_DESCRIPTION = `Search flights on Pinpoint Flights, a flight search with very deep filters: exact time windows, nonstop vs. price trade-offs, bags, fare rules, airlines to avoid, flexible dates and trip lengths, nearby airports, several destinations at once. Fill in only what the traveller said and leave everything else out (defaults apply). If something that changes the results is missing (dates, how long the stay is, an airport we can't place), no search runs: you get questions back to ask the traveller, then call again with the answers. Each traveller has ${env.mcpDailySearches} searches a day, so ask before searching when the request is vague, and don't run near-identical searches to compare: one search already prices many date combinations. Repeating a search from the last 24 hours is free. Results come with results_url, the full results page on pinpoint.flights (every fare, with filters and sorting, easy to compare), and each flight that can be booked has its own book_url, which opens booking for that exact flight. Give the traveller results_url first, then show the best match and every flight in each section (up to 10 in all), in rank order, each with its price, times, stops, airline and book_url, not just the top one or two; mention same-price swaps when a flight lists them; and tell them that when they find a flight they like, its book_url is where to book it.
 
 How to fill the fields (these are the rules the site's own assistant follows; where they say "readback", that means what you tell the traveller):
 ${FILLING_RULES}`;
 
-export const SERVER_INSTRUCTIONS = `Pinpoint Flights finds the flight that fits exactly what the traveller asked for. Use search_flights for any flight search. Ask the traveller the questions it returns rather than guessing, show the traveller every flight a search returns (the best match, then each section, each flight with its book_url), give them the results link (booking happens there), and pass on any message in "tell_the_traveller".`;
+export const SERVER_INSTRUCTIONS = `Pinpoint Flights finds the flight that fits exactly what the traveller asked for. Use search_flights for any flight search. Ask the traveller the questions it returns rather than guessing, show the traveller every flight a search returns (the best match, then each section, each flight with its book_url), give them results_url (the full results page, to see and compare every fare) and each flight's book_url (where to book that flight), and pass on any message in "tell_the_traveller".`;
 
 // ── Running a search ──
 
@@ -216,16 +217,16 @@ export async function searchFlights(args: unknown, caller: Caller): Promise<{ re
   // The same search inside the cache window replays for free, as reopening a link on the site does.
   if (stored && resultsFresh(stored)) {
     await track(caller.visit, "search_run", { searchId: id, data: { fresh: false } });
-    return { result: { status: "results", ...describeResults(stored.results!, spec, caller.siteOrigin, id), understood, link, cached_at: stored.resultsAt, usage: await usageOf(caller.keyId) } };
+    return { result: { status: "results", results_url: link, ...describeResults(stored.results!, spec, caller.siteOrigin, id), understood, cached_at: stored.resultsAt, usage: await usageOf(caller.keyId) } };
   }
 
   const before = await usageOf(caller.keyId);
   if (before.left === 0) {
-    return { result: { status: "limit_reached", understood, link, usage: before, tell_the_traveller: `You've used today's ${before.limit} searches with Pinpoint Flights. The next one frees up at ${before.resetsAt} (UTC). You can also search on the website: ${link}` } };
+    return { result: { status: "limit_reached", results_url: link, understood, usage: before, tell_the_traveller: `You've used today's ${before.limit} searches with Pinpoint Flights. The next one frees up at ${before.resetsAt} (UTC). You can also search on the website: ${link}` } };
   }
   if (busy.has(caller.keyId)) return { isError: true, result: { error: "Another search for this traveller is still running. Wait for it to finish." } };
   const spent = await store.spendLast24h().catch(() => 0);
-  if (spent >= env.maxDailySpendUsd) return { result: { status: "unavailable", understood, link, tell_the_traveller: "Pinpoint Flights has hit its daily search budget. Please try again later." } };
+  if (spent >= env.maxDailySpendUsd) return { result: { status: "unavailable", results_url: link, understood, tell_the_traveller: "Pinpoint Flights has hit its daily search budget. Please try again later." } };
 
   busy.add(caller.keyId);
   const keep: PlanEvent[] = [];
@@ -244,7 +245,7 @@ export async function searchFlights(args: unknown, caller: Caller): Promise<{ re
   const usage = await usageOf(caller.keyId);
   const note = allowanceNote(usage);
   if (error && !keep.some((e) => e.type === "done")) return { isError: true, result: { error: `The search failed: ${(error as { message: string }).message}`, usage } };
-  return { result: { status: "results", ...describeResults(keep, spec, caller.siteOrigin, id), understood, link, usage, ...(note ? { tell_the_traveller: note } : {}) } };
+  return { result: { status: "results", results_url: link, ...describeResults(keep, spec, caller.siteOrigin, id), understood, usage, ...(note ? { tell_the_traveller: note } : {}) } };
 }
 
 function finalOffers(events: PlanEvent[]): ScoredOffer[] {
@@ -290,7 +291,7 @@ export function describeResults(events: PlanEvent[], spec: FilterSpec, origin: s
     summary,
     matches: passing.length,
     // Assistants tend to show only the top one or two; the owner wants the traveller to see the whole list.
-    how_to_show: `Show the best match first, then each section under its title with every flight in it, in rank order: price, times, stops, airline and book_url link.${swaps ? " Where a flight lists same_price_other_returns or same_price_other_departures, tell the traveller they can swap to any of those flights for the same price." : ""}${spec.exactFlights ? " For the flights the traveller named, take the times from named_flights and say whether each was found." : ""} End with the link to the full results.`,
+    how_to_show: `Start with results_url: the full results page, where the traveller can see, filter and compare every fare. Then show the best match, then each section under its title with every flight in it, in rank order: price, times, stops, airline and book_url link. price_usd is the fare alone, for the whole party; where a flight has checked_bag_fees_usd or all_in_usd, show them next to it (the all-in price is what the ranking uses).${swaps ? " Where a flight lists same_price_other_returns or same_price_other_departures, tell the traveller they can swap to any of those flights for the same price." : ""}${spec.exactFlights ? " For the flights the traveller named, take the times from named_flights and say whether each was found." : ""} Each book_url opens booking for that flight (on pinpoint.flights where it can be booked here, otherwise the airline or seller that sells it): end by telling the traveller that when they find a flight they like, that is where to book it, and that results_url has the rest.`,
     ...(spec.exactFlights ? { named_flights: namedFlights(offers, spec.exactFlights) } : {}),
     ...(best ? { best_match: show(best) } : {}),
     sections: sections(rest, spec).map((g) => ({ title: g.title, flights: g.entries.map(show) })),
@@ -309,7 +310,7 @@ function namedFlights(offers: ScoredOffer[], exact: NonNullable<FilterSpec["exac
     const on = offers.filter((o) => o.slices[i] && onFlight(o.slices[i].segments.map((g) => g.flightNumber), [name]));
     const g = on[0]?.slices[i].segments.find((x) => onFlight([x.flightNumber], [name]));
     out.push(g
-      ? { flight: name, direction: i === 0 ? "depart" : "return", found: true, date: dayLabel(g.departAt), departs: clock(g.departAt), arrives: clock(g.arriveAt), from: g.origin, to: g.destination, cheapest_fare_usd: Math.min(...on.map((o) => Math.round(o.allInPrice))) }
+      ? { flight: name, direction: i === 0 ? "depart" : "return", found: true, date: dayLabel(g.departAt), departs: clock(g.departAt), arrives: clock(g.arriveAt), from: g.origin, to: g.destination, cheapest_fare_usd: Math.min(...on.map((o) => priceParts(o).fare)) }
       : { flight: name, direction: i === 0 ? "depart" : "return", found: false, note: "Not among the fares this search found; its time is unknown here, so don't state one." });
   }
   return out;
@@ -378,10 +379,15 @@ function leg(s: ScoredOffer["slices"][number], i: number, of: number): Record<st
 /** `bookUrl` is where the fare's button on the site goes (the same link, so it is logged the same way). */
 function flight(o: ScoredOffer, rank: number, spec: FilterSpec, bookUrl?: string): Record<string, unknown> {
   const seats = seatedCount(spec.travelers);
+  // The fare alone leads, as on the site and on other flight sites; what the traveller asked for on top follows.
+  const p = priceParts(o);
   return {
     rank,
-    price_usd: Math.round(o.allInPrice),
-    ...(seats > 1 ? { per_person_usd: Math.round(o.allInPrice / seats) } : {}),
+    price_usd: p.fare,
+    ...(seats > 1 ? { per_person_usd: Math.round(p.fare / seats) } : {}),
+    ...(p.bags ? { checked_bag_fees_usd: p.bags, ...(o.bagAddOnEstimated ? { checked_bag_fees_are_an_estimate: true } : {}) } : {}),
+    ...(p.ground ? { getting_to_nearby_airport_usd: p.ground } : {}),
+    ...(p.hasExtras ? { all_in_usd: p.total } : {}),
     legs: o.slices.map((s, i) => leg(s, i, o.slices.length)),
     cabin: o.fareBrand ? `${o.cabin} (${o.fareBrand})` : o.cabin,
     ...(o.basicEconomy ? { basic_economy: true } : {}),

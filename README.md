@@ -30,6 +30,15 @@ listed in the official MCP Registry as `flights.pinpoint/pinpoint-flights`.
        --header "Authorization: Bearer <key>"
      ```
 
+   - **Straight from an agent:** an agent that can make web requests (Claude
+     Code, Codex, Cursor) can be handed the personal link in a message. Opening
+     it with a plain GET returns how to call it with ordinary JSON-RPC POSTs.
+     The "Use your agent" button on the pinpoint.flights home page gives a
+     ready prompt with the link in it.
+
+Results lead with `results_url`, the full results page on pinpoint.flights,
+and each flight that can be booked has a `book_url`.
+
 Without a key the server still connects and lists its tool, but a search
 answers with where to get one. Each key has a daily allowance of fresh
 searches; repeating a search from the last 24 hours is free. Keys are handed
